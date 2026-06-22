@@ -1,0 +1,184 @@
+4. TEMA: Razvoj igara primjenom game engine-a
+Ideja i cilj izrade diplomskog rada: Projektovati i implementirati funkcionalnu video igru primjenom
+savremenog game engine-a (Unity, Godot ili Unreal Engine), sa ciljem ovladavanja kompletnim
+procesom razvoja igre, od dizajna mehanika i nivoa, preko implementacije logike igre, fizike, grafike i
+zvuka, do testiranja i optimizacije. Poseban fokus je na arhitekturi igre, primjeni programskih obrazaca
+u razvoju, integraciji resursa (modeli, animacije, audio) i analizi mogućnosti koje game engine pruža u
+odnosu na razvoj iz osnove.
+Neophodno predznanje: Potrebno je dobro poznavanje programiranja i objektno-orijentisanih
+koncepata (C#/C++), osnova matematike za igre (vektori, linearna algebra, osnove fizike), kao i
+poznavanje struktura podataka i algoritama. Korisno je osnovno razumijevanje računarske grafike,
+principa dizajna igara i rada sa verzionim sistemima (Git).
+Fundamentalna literatura: Gregory - Game Engine Architecture; Nystrom - Game Programming
+Patterns (besplatno dostupno online); Schell - The Art of Game Design: A Book of Lenses; AkenineMöller et al. - Real-Time Rendering; zvanična dokumentacija Unity i Unreal Engine-a.
+
+
+ Obavezna struktura (koraci):
+1. Ideja rada i otkud ideja studenta za rad (istraživanje) - drugim riječima, zašto je
+student odabrao baš tu temu (istraživanje);
+2. Očekivanja od rada (istraživanje);
+3. Tema u okviru mreže međuzavisnosti (okolnosti);
+4. Hipoteza rada (istraživanje);
+5. Metodologija istaživanja;
+6. Razrada teme (sprovedeno istraživanje) shodno metodologiji;
+7. Zaključak: da li je i zašto hipoteza prihvaćena ili odbijena i priprema za primjenu
+rezultata istraživanja;
+8. Literatura.
+Ukoliko rad nije strukturiran na ovaj način i napisan shodno pravilima akademskog
+pisanja mentor ga mora odbiti. U protivnom, mentor podliježe odgovornosti.
+
+===============================================================================
+PROJECT TECHNICAL SUMMARY: 2D PLATFORMER (MOUSE-AIMED DASH + ELEMENTS)
+===============================================================================
+
+1. PROJECT OVERVIEW
+   - 2D action-platformer with speedrunning and combat-focus.
+   - Core identity: Mouse-aimed, charge-based elemental dash system.
+   - Goal: Create a functional 2D platformer exploring Unity's deep technical
+     capabilities (YAML serialization, Editor scripting, PCG, and procedural
+     animation) for a final-year research paper.
+   - Target: Final-year undergraduate paper (35 pages) in English (ASU
+     partnership university).
+   - AI (Copilot/Claude) used as a development accelerator for boilerplate
+     and scripting, but not the paper's primary subject.
+
+2. CORE GAMEPLAY MECHANICS
+
+   A. Mouse-Aimed Charged Dash (Hold-to-Move):
+      - Dash INITIATES on Left Mouse Button press (click).
+      - Dash LASTS for the duration the button is HELD.
+      - Charge timer begins immediately on press and increases while held
+        (0.1s to 1.5s). 
+      - Current charge level determines current dash velocity/distance
+        (short hop at tap, full max range at full hold).
+      - Mouse cursor direction determines dash trajectory (world space).
+      - On button release, the dash immediately ends (character stops
+        dashing and resumes normal movement/physics).
+      - Line/Debug preview shows trajectory and current charge length while
+        holding.
+
+   B. Element System (Environmental Pickups):
+      - Elements alter dash properties. Pickups act like Mario-style power-ups.
+      - Earth (Green): Short/slow dash. Stops on enemy hit. Deals high
+        knockback and damage. Sacrifices speed for combat control.
+      - Fire (Red): Mid speed/length. High damage. Glass-cannon playstyle.
+      - Water (Blue): Mid speed/length. Zero damage. PHASES THROUGH enemy
+        projectiles (dodge utility).
+      - Air (White): Very long and fast. Zero damage. NO phasing (gets hit by
+        enemies and projectiles). Pure speedrunner choice.
+      - Switching elements updates dash stats and visual feedback (UI color,
+        scarf behavior).
+
+   C. Dash Charges & Chaining:
+      - Player starts with 1 air dash.
+      - Unlockable extra dashes (upgrades/progression).
+      - Can chain dashes mid-air (reset dashes only when grounded unless
+        upgraded).
+      - Camera explicitly designed to support chaining (see Camera section).
+
+3. PROCEDURAL & VISUAL SYSTEMS
+
+   A. Verlet Integration Scarf/Cape:
+      - Physically simulated scarf trailing behind the player.
+      - Reacts dynamically to velocity, gravity, and wind.
+      - NOT cosmetic – serves as diegetic UI for wind/danger prediction.
+      - Stable (no physics engine glitches) and cheap (no joints).
+
+   B. Periodic Wind Zone (Off-Screen Dragon Boss Tease):
+      - Giant dragon flies off-screen (only shadow/implied presence).
+      - Cyclical deterministic pattern: Idle -> Warning (scarf flutters) ->
+        Full Inhale (pulls player) -> Fire Attack.
+      - Scarf acts as visual precursor (1.5s warning before full force).
+      - Deterministic timing ensures speedrunners can memorize and exploit
+        the wind for boosts. Not random.
+
+   C. Procedural Level Generation (PCG):
+      - Tilemap-based generation (efficient).
+      - Constraint solving: Ensures platform connectivity (no unreachable
+        areas).
+      - Constraints based on player jump distance and dash max length.
+      - Alternative explored (theoretically): Random Walk, BSP, Perlin Noise.
+      - Generates pickups (20% of platforms) and spikes (10% of ground tiles).
+
+4. CAMERA BEHAVIOR (Critical for Dash Feel)
+   - SmoothDamp follow script.
+   - Normal follow speed (smooth, tight).
+   - DASH STATE: Camera lags behind the dash direction (slower follow speed).
+     Visually communicates momentum/velocity.
+   - DASH END (Release button or collision): Camera instantly switches to
+     high-speed "catch-up" mode. Snaps back to player rapidly.
+   - Why: Prevents visual disorientation when chaining multiple dashes in
+     quick succession (critical for speedrunner feel).
+
+5. TECHNICAL IMPLEMENTATION (UNITY SPECIFIC)
+
+   A. Editor Scripts (Automating Setup):
+      - `BuildGameScene.cs`: Creates full scene (Player, UI, Parallax, Wind,
+        Pickups, Spikes, Enemies) via MenuItem "Tools/Build Platformer Scene".
+      - `ProceduralLevelGenerator.cs`: Generates constraint-based levels at
+        edit-time.
+      - Why: Avoids manual Inspector dragging, ensures reproducibility,
+        demonstrates Unity's extensibility.
+
+   B. Runtime Scripts (Core Logic):
+      - `PlayerController.cs`: Input buffering (coyote time, jump buffer),
+        mouse-aimed hold-to-dash (press to start, hold to extend, release to
+        stop), element switching, dash state machine.
+      - `ScarfController.cs`: Verlet integration, public `ApplyWind()` method.
+      - `WindZoneController.cs`: Periodic coroutine, dragon position
+        movement, fireball spawning.
+      - `CameraController.cs`: SmoothDamp with dynamic speeds based on
+        `IsDashing()` state from PlayerController.
+      - `UIManager.cs`: Finds elements by name (GameObject.Find). Avoids
+        Inspector drag. Displays current element, dash charges, charge meter.
+      - `EnemyPatrol.cs`: FSM (Walk/Wait). Ranged shooting when player in
+        range.
+      - `EnemyProjectile.cs`: Simple moving projectile with lifetime.
+      - `SpikeHazard.cs`: Damages player on touch.
+      - `ElementPickup.cs`: Applies element to player on trigger.
+
+   C. Unity Serialization & YAML Deep-Dive:
+      - `.unity` files are plain-text YAML (not encrypted).
+      - Contain GUIDs and fileIDs for asset/reference resolution.
+      - Direct AI editing of YAML is impractical (collision of IDs).
+      - Editor scripts (using Unity API) are the safe, viable alternative for
+        AI-assisted scene generation.
+      - Unity default text serialization enables version control (Git diff).
+
+6. AI DEVELOPMENT METHODOLOGY (Tooling, not primary subject)
+   - Tools: GitHub Copilot Pro + Claude Code Pro (VSCode terminal).
+   - Approach: Prompts generated to create Editor scripts + Runtime scripts.
+   - AI Limitations Encountered (practical notes for methodology section):
+        * Cannot directly manipulate Unity Editor scene hierarchy.
+        * Cannot generate valid GUIDs or safe YAML manually.
+        * Struggle with visual positioning and "feel" tuning.
+   - Strengths (practical notes):
+        * Excellent for boilerplate (UI connections, Verlet math).
+        * Quickly generates complex state machines and physics calculations.
+        * Saved significant time on repetitive script writing.
+
+7. RESEARCH PAPER ANGLES (35 Pages)
+   a. Unity YAML Serialization & Scene Structure (GUIDs, fileIDs, meta files).
+   b. Editor Scripts: Extending Unity for rapid prototyping and automation.
+   c. PCG: Tilemap vs. GameObject instantiation (performance profiling).
+   d. PCG Efficiency: Single-pass vs. Chunked generation. Object Pooling.
+   e. Handcrafted Level Design: Theory vs. Algorithmic constraints.
+   f. Movement Fluidity: Coyote Time, Jump Buffering, Frame-rate
+      independence.
+   g. Procedural Animation (Verlet Scarf) as Diegetic UI for gameplay
+      mechanics.
+   h. Deterministic vs. Random Systems (justifying deterministic wind for
+      speedrunning).
+   i. Performance Profiling (Unity Profiler, Frame Debugger) comparing
+      runtime PCG vs. static levels.
+
+8. DESIGN PHILOSOPHY (Speedrunner & Accessibility Focus)
+   - Predictable mechanics (no random wind timing).
+   - Visual clarity (scarf indicates wind direction before force applies).
+   - Multiple skill expressions (Earth=combat, Air=speed, Water=evasion).
+   - Visual-audio independent feedback (scarf works without sound).
+   - Dash chaining requires precision but rewards skilled players.
+
+===============================================================================
+END OF TECHNICAL SUMMARY
+===============================================================================
