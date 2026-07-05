@@ -248,15 +248,25 @@ public static class ProceduralLevelGenerator
                         // Centre = surface + 0.5 = cell.y + 1.5
                         var eGO  = new GameObject($"ProcEnemy_{midX}_{cell.y}");
                         eGO.transform.position = new Vector3(midX + 0.5f, cell.y + 1.5f, 0f);
-                        eGO.AddComponent<SpriteRenderer>();
+                        var eSr = eGO.AddComponent<SpriteRenderer>();
+                        // Matches BuildGameScene.cs's hand-placed RangedEnemy colour —
+                        // these are shooters too (shootInterval/shootRange below), so
+                        // the same orange capsule keeps procedurally spawned enemies
+                        // visually consistent with the hand-built ones instead of
+                        // being invisible (a bare AddComponent<SpriteRenderer>() with
+                        // no sprite assigned renders nothing at all; only the
+                        // EnemyPatrol-added health bar, which has its own sprite, was
+                        // ever visible).
+                        eSr.sprite = CreateEnemySprite(new Color(0.9f, 0.5f, 0.1f));
                         var erb = eGO.AddComponent<Rigidbody2D>();
                         erb.bodyType = RigidbodyType2D.Kinematic;
                         var ebc = eGO.AddComponent<BoxCollider2D>();
                         ebc.isTrigger = true;
-                        // No sprite is assigned here, so BoxCollider2D's auto-size
-                        // (from SpriteRenderer bounds) locks in a degenerate
-                        // near-zero size. Set explicitly to match the 1-unit box
-                        // the position math above already assumes.
+                        // BoxCollider2D auto-sizes from the SpriteRenderer bounds at
+                        // the moment it's added, which is BEFORE the sprite assignment
+                        // above — it would otherwise lock in a degenerate near-zero
+                        // size. Set explicitly to match the 1-unit box the position
+                        // math above already assumes.
                         ebc.size = new Vector2(1f, 1f);
                         var ep = eGO.AddComponent<EnemyPatrol>();
                         if (ep != null)
@@ -280,6 +290,26 @@ public static class ProceduralLevelGenerator
         }
 
         Debug.Log($"[ProcGen] Objects: {pickups} pickups, {spikes} spikes, {enemies} enemies.");
+    }
+
+    /// <summary>16x16 filled-ellipse sprite at 16 PPU (1x1 world units), matching the
+    /// enemy's BoxCollider2D size exactly. Same technique as BuildGameScene.cs's
+    /// CreateCapsuleSprite, just square instead of tall, since this script has no
+    /// access to that private helper.</summary>
+    private static Sprite CreateEnemySprite(Color color)
+    {
+        const int size = 16;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        tex.filterMode = FilterMode.Point;
+        float r = size * 0.5f;
+        for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                float dx = (x + 0.5f - r) / r, dy = (y + 0.5f - r) / r;
+                tex.SetPixel(x, y, dx * dx + dy * dy <= 1f ? color : Color.clear);
+            }
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
     }
 
     private static void CleanupOldProcGenObjects()

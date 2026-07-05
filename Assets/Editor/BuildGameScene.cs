@@ -36,6 +36,11 @@ public static class BuildGameScene
         // ── New empty scene ───────────────────────────────────────────────────
         var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
+        // Ensure the "Ground" layer exists so PlayerController.IsGrounded() raycasts
+        // can detect the tilemap.  The index is used to set the layer on GroundTilemap
+        // and to configure groundLayer on PlayerController.
+        int groundLayerIndex = EnsureLayer("Ground");
+
         // ── 1. Main Camera ────────────────────────────────────────────────────
         try
         {
@@ -59,15 +64,34 @@ public static class BuildGameScene
         try
         {
             var gridGO = ObjectFactory.CreateGameObject("Grid", typeof(Grid));
+
+            // Standalone TilemapCollider2D on a static GameObject (no Rigidbody2D).
+            // This is the most reliable Unity 2D platformer setup: the collider acts
+            // as a permanent static body that dynamic Rigidbody2D objects bounce off.
+            // Do NOT add CompositeCollider2D here: setting usedByComposite=true would
+            // disable TilemapCollider2D as a standalone collider and hand off shape
+            // generation to the composite, which can silently fail to build geometry
+            // in programmatically-constructed scenes.
             var tilemapGO = ObjectFactory.CreateGameObject("GroundTilemap",
                 typeof(Tilemap), typeof(TilemapRenderer), typeof(TilemapCollider2D));
             tilemapGO.transform.SetParent(gridGO.transform, false);
+            tilemapGO.layer = groundLayerIndex;
 
             var groundTilemap = tilemapGO.GetComponent<Tilemap>();
             if (groundTilemap == null) throw new Exception("Tilemap component missing on GroundTilemap.");
 
             // Attempt to load an existing tile; fall back to auto-generated one.
             Tile groundTile = AssetDatabase.LoadAssetAtPath<Tile>("Assets/Tiles/GroundTile.asset");
+            // Fix any previously-saved tile that used the Sprite collider type:
+            // dynamically created sprites have no physics shape data, so
+            // TilemapCollider2D generates nothing.  Grid type always produces a
+            // full cell-sized rectangle regardless of the sprite.
+            if (groundTile != null && groundTile.colliderType != Tile.ColliderType.Grid)
+            {
+                groundTile.colliderType = Tile.ColliderType.Grid;
+                EditorUtility.SetDirty(groundTile);
+                AssetDatabase.SaveAssets();
+            }
             if (groundTile == null)
             {
                 Debug.LogWarning("[BuildGameScene] Assets/Tiles/GroundTile.asset not found – " +
@@ -98,7 +122,11 @@ public static class BuildGameScene
             var playerGO = ObjectFactory.CreateGameObject("Player",
                 typeof(SpriteRenderer), typeof(Rigidbody2D), typeof(BoxCollider2D));
             playerGO.tag = "Player";
-            playerGO.transform.position = new Vector3(0f, -3f, 0f);
+            // Spawn above the floor.  Tile row sits at tilemap y=-4, which is
+            // world y=[-4,-3] (top edge at y=-3).  A 1-unit BoxCollider2D centred
+            // at y=-2 has its bottom at y=-2.5, giving 0.5 units of clearance so
+            // the player never starts inside the floor geometry.
+            playerGO.transform.position = new Vector3(0f, -2f, 0f);
 
             var sr = playerGO.GetComponent<SpriteRenderer>();
             if (sr == null) throw new Exception("SpriteRenderer missing on Player.");
@@ -106,8 +134,12 @@ public static class BuildGameScene
 
             var rb = playerGO.GetComponent<Rigidbody2D>();
             if (rb == null) throw new Exception("Rigidbody2D missing on Player.");
-            rb.gravityScale = 3f;
-            rb.constraints  = RigidbodyConstraints2D.FreezeRotation;
+            rb.gravityScale          = 3f;
+            rb.constraints           = RigidbodyConstraints2D.FreezeRotation;
+            // Continuous collision detection prevents the player from tunnelling
+            // through thin geometry at high fall speeds (gravityScale=3 amplifies
+            // vertical velocity quickly; Discrete can miss a tile in a single step).
+            rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
 
             // PlayerController – compiled separately; AddComponent returns null if not found.
             var pc = playerGO.AddComponent<PlayerController>();
@@ -120,6 +152,8 @@ public static class BuildGameScene
                 // Air is the safest default: it never stops on enemy contact, preventing
                 // accidental blocking inside an enemy hitbox.
                 pc.currentElement = PlayerController.CreateAirElement();
+                // Wire up the ground-detection layer so IsGrounded() raycasts find the tilemap.
+                pc.groundLayer    = 1 << groundLayerIndex;
             }
 
             // ScarfRoot – empty child at local offset (0.3, -0.2)
@@ -351,7 +385,11 @@ public static class BuildGameScene
             Directory.CreateDirectory("Assets/Tiles");
             var sprite = CreateSquareSprite(Color.white);
             var tile   = ScriptableObject.CreateInstance<Tile>();
-            tile.sprite = sprite;
+            tile.sprite        = sprite;
+            // Grid type generates a full cell-sized collider rect.  Sprite type
+            // reads physics shapes from the sprite asset; a procedural in-memory
+            // sprite has none, so TilemapCollider2D would produce zero shapes.
+            tile.colliderType  = Tile.ColliderType.Grid;
             AssetDatabase.CreateAsset(tile, "Assets/Tiles/GroundTile.asset");
             AssetDatabase.SaveAssets();
             return tile;
@@ -662,5 +700,34 @@ public static class BuildGameScene
         {
             Debug.LogError($"[BuildGameScene] SpawnSpikeHazard '{objName}' failed: {e.Message}");
         }
+    }
+
+    /// <summary>
+    /// Returns the layer index for <paramref name="layerName"/>, registering it
+    /// in ProjectSettings/TagManager.asset if it does not yet exist.
+    /// Falls back to 0 (Default) if all 24 user-layer slots are occupied.
+    /// </summary>
+    private static int EnsureLayer(string layerName)
+    {
+        int idx = LayerMask.NameToLayer(layerName);
+        if (idx != -1) return idx;
+
+        var tagManager = new SerializedObject(
+            AssetDatabase.LoadAssetAtPath<UnityEngine.Object>("ProjectSettings/TagManager.asset"));
+        SerializedProperty layers = tagManager.FindProperty("layers");
+
+        for (int i = 8; i < layers.arraySize; i++)
+        {
+            SerializedProperty slot = layers.GetArrayElementAtIndex(i);
+            if (!string.IsNullOrEmpty(slot.stringValue)) continue;
+            slot.stringValue = layerName;
+            tagManager.ApplyModifiedProperties();
+            Debug.Log($"[BuildGameScene] Layer '{layerName}' registered at index {i}.");
+            return i;
+        }
+
+        Debug.LogError($"[BuildGameScene] No free user-layer slot found for '{layerName}'; " +
+                       "falling back to Default layer (0). Assign a free layer manually.");
+        return 0;
     }
 }
