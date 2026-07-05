@@ -73,3 +73,11 @@ __pycache__/
 *.pyo
 .env
 venv/
+
+# Thesis documents – keep local only
+generate_thesis.py
+TechSpecs.txt
+*.pdf
+*.docx
+Thesis_2D_Platformer_Unity*.txt
+thesis_vs_implementation_changes.txt
