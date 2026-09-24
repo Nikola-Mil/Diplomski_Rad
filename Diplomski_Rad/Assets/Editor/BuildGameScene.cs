@@ -128,71 +128,13 @@ public static class BuildGameScene
         // ── 3. Player ─────────────────────────────────────────────────────────
         try
         {
-            var playerGO = ObjectFactory.CreateGameObject("Player",
-                typeof(SpriteRenderer), typeof(Rigidbody2D), typeof(BoxCollider2D));
-            playerGO.tag = "Player";
-            // Dedicated layer, separate from the ground tilemap (which stays on
-            // Default). Previously both were on Default and PlayerController's
-            // IsGrounded() ground-check BoxCast relied on a 0.01-unit gap alone
-            // to avoid detecting the player's OWN collider as "ground" — with
-            // edgeRadius, fast falls, and Continuous collision all inflating the
-            // effective collision bounds, that gap wasn't reliable, and a
-            // self-detected "always grounded" reading is exactly what an
-            // infinite-jump bug looks like (jump is available every press,
-            // regardless of actual height). Being on a different layer makes
-            // that class of bug structurally impossible rather than relying on
-            // a distance epsilon.
-            playerGO.layer = EnsureLayer("Player");
             // x=-12 sits directly above the "far-left (low)" platform (cells
             // -13..-10 at cell y=-2, i.e. world y=[-2,-1], surface at y=-1) —
             // spawning at the old y=-2 put the player's collider (extents
             // ±0.5) squarely inside that platform's tile instead of on the
             // floor beneath it. Spawn standing on the platform's surface
             // instead (surface + half-height = -1 + 0.5 = -0.5).
-            playerGO.transform.position = new Vector3(-12f, -0.5f, 0f);
-
-            playerGO.GetComponent<SpriteRenderer>().sprite =
-                CreateSquareSprite(new Color(0.3f, 0.8f, 1f));
-
-            var pRb = playerGO.GetComponent<Rigidbody2D>();
-            // Raised from 3 alongside PlayerController.jumpForce (14→17): higher
-            // gravity + higher launch velocity keeps jump height about the same
-            // but roughly halves hang time so jumps feel snappy, not floaty.
-            pRb.gravityScale           = 4.5f;
-            pRb.constraints            = RigidbodyConstraints2D.FreezeRotation;
-            pRb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
-            // Interpolation smooths the rendered position between 50 Hz physics steps.
-            pRb.interpolation          = RigidbodyInterpolation2D.Interpolate;
-
-            // BoxCollider2D auto-sizes to the SpriteRenderer bounds at creation time,
-            // but the sprite hasn't been assigned yet at that point — so Unity records
-            // a degenerate 0.0001×0.0001 size.  Explicitly set it to match the 1×1
-            // world-unit sprite (16 px at 16 PPU).
-            var pCol = playerGO.GetComponent<BoxCollider2D>();
-            if (pCol != null)
-            {
-                pCol.size = new Vector2(1f, 1f);
-                // Rounds the collider's corners slightly so it slides over the internal
-                // vertex between adjacent tile colliders instead of snagging on it —
-                // the standard fix for "sticking" on flat multi-tile ground/ceilings.
-                pCol.edgeRadius   = 0.05f;
-                pCol.sharedMaterial = GetZeroFrictionMaterial();
-            }
-
-            var pc = playerGO.AddComponent<PlayerController>();
-            if (pc != null)
-            {
-                // Start with no element picked up yet — PlayerController.Awake()
-                // also defaults here, but setting it explicitly keeps the scene
-                // in sync with the neutral (short, Fire-speed) baseline dash.
-                pc.currentElement = PlayerController.CreateNeutralElement();
-                pc.groundLayer    = 1 << groundLayerIndex;
-            }
-
-            var scarfRoot = ObjectFactory.CreateGameObject("ScarfRoot");
-            scarfRoot.transform.SetParent(playerGO.transform, false);
-            scarfRoot.transform.localPosition = new Vector3(0.3f, -0.2f, 0f);
-            scarfRoot.AddComponent<ScarfController>();
+            CreatePlayer(new Vector3(-12f, -0.5f, 0f), groundLayerIndex);
         }
         catch (Exception e) { Debug.LogError($"[BuildGameScene] Player: {e.Message}"); }
 
@@ -364,6 +306,76 @@ public static class BuildGameScene
             Debug.Log("[BuildGameScene] Saved -> Assets/Scenes/PlatformerScene.unity");
         }
         catch (Exception e) { Debug.LogError($"[BuildGameScene] Save: {e.Message}"); }
+    }
+
+    // ── Player ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates the fully configured player. internal so the EditMode tests
+    /// measure exactly the body this builder puts in the scene.
+    /// </summary>
+    internal static GameObject CreatePlayer(Vector3 position, int groundLayerIndex)
+    {
+        var playerGO = ObjectFactory.CreateGameObject("Player",
+            typeof(SpriteRenderer), typeof(Rigidbody2D), typeof(BoxCollider2D));
+        playerGO.tag = "Player";
+        // Dedicated layer, separate from the ground tilemap (which stays on
+        // Default). Previously both were on Default and PlayerController's
+        // IsGrounded() ground-check BoxCast relied on a 0.01-unit gap alone
+        // to avoid detecting the player's OWN collider as "ground" — with
+        // edgeRadius, fast falls, and Continuous collision all inflating the
+        // effective collision bounds, that gap wasn't reliable, and a
+        // self-detected "always grounded" reading is exactly what an
+        // infinite-jump bug looks like (jump is available every press,
+        // regardless of actual height). Being on a different layer makes
+        // that class of bug structurally impossible rather than relying on
+        // a distance epsilon.
+        playerGO.layer = EnsureLayer("Player");
+        playerGO.transform.position = position;
+
+        playerGO.GetComponent<SpriteRenderer>().sprite =
+            CreateSquareSprite(new Color(0.3f, 0.8f, 1f));
+
+        var pRb = playerGO.GetComponent<Rigidbody2D>();
+        // Raised from 3 alongside PlayerController.jumpForce (14→17): higher
+        // gravity + higher launch velocity keeps jump height about the same
+        // but roughly halves hang time so jumps feel snappy, not floaty.
+        pRb.gravityScale           = 4.5f;
+        pRb.constraints            = RigidbodyConstraints2D.FreezeRotation;
+        pRb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+        // Interpolation smooths the rendered position between 50 Hz physics steps.
+        pRb.interpolation          = RigidbodyInterpolation2D.Interpolate;
+
+        // BoxCollider2D auto-sizes to the SpriteRenderer bounds at creation time,
+        // but the sprite hasn't been assigned yet at that point — so Unity records
+        // a degenerate 0.0001×0.0001 size.  Explicitly set it to match the 1×1
+        // world-unit sprite (16 px at 16 PPU).
+        var pCol = playerGO.GetComponent<BoxCollider2D>();
+        if (pCol != null)
+        {
+            pCol.size = new Vector2(1f, 1f);
+            // Rounds the collider's corners slightly so it slides over the internal
+            // vertex between adjacent tile colliders instead of snagging on it —
+            // the standard fix for "sticking" on flat multi-tile ground/ceilings.
+            pCol.edgeRadius   = 0.05f;
+            pCol.sharedMaterial = GetZeroFrictionMaterial();
+        }
+
+        var pc = playerGO.AddComponent<PlayerController>();
+        if (pc != null)
+        {
+            // Start with no element picked up yet — PlayerController.Awake()
+            // also defaults here, but setting it explicitly keeps the scene
+            // in sync with the neutral (short, Fire-speed) baseline dash.
+            pc.currentElement = PlayerController.CreateNeutralElement();
+            pc.groundLayer    = 1 << groundLayerIndex;
+        }
+
+        var scarfRoot = ObjectFactory.CreateGameObject("ScarfRoot");
+        scarfRoot.transform.SetParent(playerGO.transform, false);
+        scarfRoot.transform.localPosition = new Vector3(0.3f, -0.2f, 0f);
+        scarfRoot.AddComponent<ScarfController>();
+        return playerGO;
     }
 
     // ── Layer helpers ─────────────────────────────────────────────────────────
@@ -737,15 +749,24 @@ public static class BuildGameScene
         if (ep != null) { ep.elementToGive = element; ep.respawnTime = 5f; }
     }
 
-    private static void SpawnSpikeHazard(string objName, Vector3 position)
+    // internal: also used by ProceduralLevelGenerator for its procedural spikes.
+    internal static GameObject SpawnSpikeHazard(string objName, Vector3 position)
     {
         var go = ObjectFactory.CreateGameObject(objName,
             typeof(SpriteRenderer), typeof(BoxCollider2D));
         go.transform.position   = position;
         go.transform.localScale = new Vector3(0.4f, 0.4f, 1f);
-        go.GetComponent<BoxCollider2D>().isTrigger = true;
+        var bc = go.GetComponent<BoxCollider2D>();
+        bc.isTrigger = true;
+        // Same auto-size trap as the player/enemies: the collider was added
+        // before the sprite existed, so it recorded a degenerate 0.0001×0.0001
+        // size — a single point at the spike's centre. The player then only got
+        // hurt when its box covered that exact point, not the visible spike
+        // (x0.4 scale → 0.4×0.4 world units, matching the sprite).
+        bc.size = new Vector2(1f, 1f);
         go.GetComponent<SpriteRenderer>().sprite   = CreateSquareSprite(new Color(0.7f, 0.7f, 0.8f));
         go.AddComponent<SpikeHazard>();
+        return go;
     }
 
     // ── UI Canvas ─────────────────────────────────────────────────────────────

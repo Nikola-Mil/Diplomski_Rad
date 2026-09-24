@@ -13,6 +13,11 @@
 //     All are reachable with a standard platformer jump.
 //   • Only the proc-gen zone tiles are cleared on each run; the regular scene
 //     tiles (PROC_LEFT_END_X <= x < PROC_RIGHT_START_X) are never touched.
+//
+// Reproducibility: every random draw (layout AND object placement) comes from
+// one System.Random seeded per run, so a given seed always rebuilds exactly the
+// same level. The seed is logged on every run, including the unseeded menu
+// command, so any level that was ever generated can be regenerated.
 
 using System;
 using System.Collections.Generic;
@@ -23,29 +28,52 @@ using UnityEngine.Tilemaps;
 public static class ProceduralLevelGenerator
 {
     // ── Zone constants ────────────────────────────────────────────────────────
-    private const int PROC_RIGHT_START_X = 21;    // first right-zone tile column
-    private const int PROC_RIGHT_END_X   = 81;    // exclusive upper bound (60 cols wide)
-    private const int PROC_LEFT_START_X  = -75;   // first left-zone tile column
-    private const int PROC_LEFT_END_X    = -15;   // exclusive upper bound (60 cols wide, flush with SCENE_LEFT)
-    private const int FLOOR_Y      = -4;    // same floor row as regular scene
+    // internal (not private) so the EditMode tests in Assets/Editor/Tests read
+    // the real values instead of keeping their own copies.
+    internal const int PROC_RIGHT_START_X = 21;    // first right-zone tile column
+    internal const int PROC_RIGHT_END_X   = 81;    // exclusive upper bound (60 cols wide)
+    internal const int PROC_LEFT_START_X  = -75;   // first left-zone tile column
+    internal const int PROC_LEFT_END_X    = -15;   // exclusive upper bound (60 cols wide, flush with SCENE_LEFT)
+    internal const int FLOOR_Y      = -4;    // same floor row as regular scene
     // Matches BuildGameScene.FLOOR_THICKNESS — deep enough that the camera's
     // full 9.5-unit orthographic half-height never reveals empty space below it.
-    private const int FLOOR_THICKNESS = 20;
+    internal const int FLOOR_THICKNESS = 20;
     // Platform heights (cell y). Surface = cell.y + 1 in world coordinates.
-    private static readonly int[] PLATFORM_HEIGHTS = { -3, -2, -1 };
+    internal static readonly int[] PLATFORM_HEIGHTS = { -3, -2, -1 };
     // Min/max number of tiles in a platform segment.
-    private const int MIN_PLAT_W = 3;
-    private const int MAX_PLAT_W = 6;
+    internal const int MIN_PLAT_W = 3;
+    internal const int MAX_PLAT_W = 6;
     // Horizontal gap between platform end and next platform start.
-    private const int MIN_GAP    = 2;
-    private const int MAX_GAP    = 4;
+    internal const int MIN_GAP    = 2;
+    internal const int MAX_GAP    = 4;
+    // Empty cells needed above a surface tile before objects may spawn on it.
+    // The player is 1.1 units tall (1x1 box + 0.05 edge radius), so a 1-cell
+    // pocket under a cell-y -2 platform is somewhere it can never enter —
+    // anything spawned there would be unreachable.
+    internal const int MIN_OBJECT_CLEARANCE = 2;
     // How far above the surface tile center objects are spawned.
     // Tile top = cell.y + 1.  Object center for 1-unit height = cell.y + 1 + 0.5 = cell.y + 1.5
     private const float ABOVE    = 1.5f;
 
+    /// <summary>One floating platform in cell coordinates (xStart..xEnd inclusive).</summary>
+    internal struct PlatformSpan
+    {
+        public int xStart, xEnd, y;
+    }
+
     [MenuItem("Tools/Generate Procedural Level")]
     public static void GenerateLevel()
     {
+        // No seed chosen: draw one, but still log it so this exact level can
+        // be rebuilt later via Tools/Generate Procedural Level (Seeded)...
+        GenerateLevel(new System.Random().Next(1, int.MaxValue));
+    }
+
+    public static void GenerateLevel(int seed)
+    {
+        var rng = new System.Random(seed);
+        Debug.Log($"[ProcGen] Seed = {seed}");
+
         Tilemap tilemap = FindGroundTilemap();
         if (tilemap == null)
         {
@@ -69,8 +97,8 @@ public static class ProceduralLevelGenerator
         // Collect all new tile positions (for surface detection later).
         var allTiles = new HashSet<Vector3Int>();
 
-        GenerateZone(tilemap, tile, allTiles, PROC_LEFT_START_X,  PROC_LEFT_END_X);
-        GenerateZone(tilemap, tile, allTiles, PROC_RIGHT_START_X, PROC_RIGHT_END_X);
+        GenerateZone(tilemap, tile, allTiles, rng, PROC_LEFT_START_X,  PROC_LEFT_END_X);
+        GenerateZone(tilemap, tile, allTiles, rng, PROC_RIGHT_START_X, PROC_RIGHT_END_X);
 
         tilemap.RefreshAllTiles();
         var comp = tilemap.GetComponent<CompositeCollider2D>();
@@ -79,7 +107,7 @@ public static class ProceduralLevelGenerator
 
         // Spawn gameplay objects on top of the new surfaces.
         var surface = FindSurfaceTiles(allTiles);
-        PlaceObjectsOnSurface(surface);
+        PlaceObjectsOnSurface(surface, rng);
 
         Debug.Log($"[ProcGen] Done. {allTiles.Count} tiles in x={PROC_LEFT_START_X}..{PROC_LEFT_END_X - 1} " +
                   $"and x={PROC_RIGHT_START_X}..{PROC_RIGHT_END_X - 1}.");
@@ -88,7 +116,7 @@ public static class ProceduralLevelGenerator
     // ── Zone generation ──────────────────────────────────────────────────────
 
     private static void GenerateZone(Tilemap tm, Tile tile, HashSet<Vector3Int> allTiles,
-                                      int zoneStart, int zoneEndExclusive)
+                                      System.Random rng, int zoneStart, int zoneEndExclusive)
     {
         // Floor: FLOOR_THICKNESS tiles thick across the full zone.
         for (int x = zoneStart; x < zoneEndExclusive; x++)
@@ -96,7 +124,9 @@ public static class ProceduralLevelGenerator
                 Place(tm, tile, allTiles, x, FLOOR_Y - dy);
 
         // Floating platforms scattered above the floor.
-        GeneratePlatforms(tm, tile, allTiles, zoneStart, zoneEndExclusive);
+        foreach (var p in LayoutPlatforms(rng, zoneStart, zoneEndExclusive))
+            for (int px = p.xStart; px <= p.xEnd; px++)
+                Place(tm, tile, allTiles, px, p.y);
     }
 
     // ── Clear zone ────────────────────────────────────────────────────────────
@@ -119,37 +149,38 @@ public static class ProceduralLevelGenerator
 
     // ── Platform generation ───────────────────────────────────────────────────
 
-    private static void GeneratePlatforms(Tilemap tm, Tile tile, HashSet<Vector3Int> allTiles,
-                                           int zoneStart, int zoneEndExclusive)
+    // Pure layout step: no tilemap access, all randomness from rng.
+    internal static List<PlatformSpan> LayoutPlatforms(System.Random rng, int zoneStart, int zoneEndExclusive)
     {
         // Walk left-to-right through the zone, placing platforms with random
         // height/width/gap. Alternate low/high heights to keep the layout varied.
-        int x = zoneStart + 3;   // short gap after zone start before first platform
+        var platforms  = new List<PlatformSpan>();
+        int x          = zoneStart + 3;   // short gap after zone start before first platform
         int prevHeight = PLATFORM_HEIGHTS[1];  // start at mid height
 
         while (x < zoneEndExclusive - MAX_PLAT_W - 2)
         {
             // Pick a height different from the previous one for variety.
             int heightIdx;
-            do { heightIdx = UnityEngine.Random.Range(0, PLATFORM_HEIGHTS.Length); }
+            do { heightIdx = rng.Next(0, PLATFORM_HEIGHTS.Length); }
             while (PLATFORM_HEIGHTS[heightIdx] == prevHeight);
             int platY = PLATFORM_HEIGHTS[heightIdx];
             prevHeight = platY;
 
-            int width = UnityEngine.Random.Range(MIN_PLAT_W, MAX_PLAT_W + 1);
+            int width = rng.Next(MIN_PLAT_W, MAX_PLAT_W + 1);
             int end   = Mathf.Min(x + width - 1, zoneEndExclusive - 2);
 
-            for (int px = x; px <= end; px++)
-                Place(tm, tile, allTiles, px, platY);
+            platforms.Add(new PlatformSpan { xStart = x, xEnd = end, y = platY });
 
-            int gap = UnityEngine.Random.Range(MIN_GAP, MAX_GAP + 1);
+            int gap = rng.Next(MIN_GAP, MAX_GAP + 1);
             x = end + 1 + gap;
         }
+        return platforms;
     }
 
     // ── Object placement ──────────────────────────────────────────────────────
 
-    private static void PlaceObjectsOnSurface(List<Vector3Int> surface)
+    private static void PlaceObjectsOnSurface(List<Vector3Int> surface, System.Random rng)
     {
         if (surface.Count == 0)
         {
@@ -186,7 +217,7 @@ public static class ProceduralLevelGenerator
             runLength = sameRun ? runLength + 1 : 1;
             prevY     = cell.y;
 
-            float roll = UnityEngine.Random.value;
+            float roll = (float)rng.NextDouble();
 
             // 18 % → element pickup
             if (roll < 0.18f)
@@ -217,14 +248,10 @@ public static class ProceduralLevelGenerator
                 {
                     // Spike sits flush with the surface: tile top = cell.y+1 (world),
                     // spike half-height with scale 0.4 = 0.2 → centre at cell.y+1+0.2
-                    var go = new GameObject($"ProcSpike_{cell.x}_{cell.y}");
-                    go.transform.position   = new Vector3(cell.x + 0.5f, cell.y + 1.2f, 0f);
-                    go.transform.localScale = new Vector3(0.4f, 0.4f, 1f);
-                    var sr = go.AddComponent<SpriteRenderer>();
-                    sr.color = new Color(0.7f, 0.7f, 0.8f);
-                    var bc = go.AddComponent<BoxCollider2D>();
-                    bc.isTrigger = true;
-                    go.AddComponent<SpikeHazard>();
+                    // Same factory as the hand-placed spikes, so both get the same
+                    // visible sprite and correctly sized trigger.
+                    BuildGameScene.SpawnSpikeHazard($"ProcSpike_{cell.x}_{cell.y}",
+                        new Vector3(cell.x + 0.5f, cell.y + 1.2f, 0f));
                     spikes++;
                 }
                 catch (Exception e) { Debug.LogError($"[ProcGen] Spike: {e.Message}"); }
@@ -235,7 +262,7 @@ public static class ProceduralLevelGenerator
                             || surface[i + 1].y != cell.y
                             || surface[i + 1].x != cell.x + 1;
 
-            if (runEnded && runLength >= 4 && UnityEngine.Random.value < 0.4f)
+            if (runEnded && runLength >= 4 && rng.NextDouble() < 0.4)
             {
                 try
                 {
@@ -273,7 +300,7 @@ public static class ProceduralLevelGenerator
                         {
                             ep.leftBound     = surface[runStart].x;
                             ep.rightBound    = surface[runStart + runLength - 1].x + 1f;
-                            ep.shootInterval = UnityEngine.Random.Range(2f, 4f);
+                            ep.shootInterval = 2f + 2f * (float)rng.NextDouble();
                             ep.shootRange    = 12f;
                         }
                         enemies++;
@@ -373,7 +400,10 @@ public static class ProceduralLevelGenerator
         }
     }
 
-    // Returns tiles where the cell directly above is empty (walkable surface).
+    // Returns tiles the player can actually stand on: the MIN_OBJECT_CLEARANCE
+    // cells above are empty. Checking only the cell directly above let floor
+    // tiles under a cell-y -2 platform count as surface, and ~12 % of pickups
+    // (plus spikes) landed in that 1-cell pocket where the player can't fit.
     // Sub-floor tiles (y < FLOOR_Y) are excluded since they're never walked on.
     private static List<Vector3Int> FindSurfaceTiles(HashSet<Vector3Int> allTiles)
     {
@@ -381,10 +411,36 @@ public static class ProceduralLevelGenerator
         foreach (var cell in allTiles)
         {
             if (cell.y < FLOOR_Y) continue;  // exclude sub-floor row
-            if (!allTiles.Contains(new Vector3Int(cell.x, cell.y + 1, 0)))
+            bool clear = true;
+            for (int dy = 1; dy <= MIN_OBJECT_CLEARANCE && clear; dy++)
+                clear = !allTiles.Contains(new Vector3Int(cell.x, cell.y + dy, 0));
+            if (clear)
                 result.Add(cell);
         }
         result.Sort((a, b) => a.x != b.x ? a.x.CompareTo(b.x) : a.y.CompareTo(b.y));
         return result;
+    }
+}
+
+/// <summary>
+/// Tools/Generate Procedural Level (Seeded)... — regenerates the level from a
+/// typed-in seed, e.g. one copied from an earlier "[ProcGen] Seed = N" log line.
+/// </summary>
+public class ProceduralLevelSeedWindow : EditorWindow
+{
+    private int seed = 2026;
+
+    [MenuItem("Tools/Generate Procedural Level (Seeded)...")]
+    private static void Open()
+    {
+        var w = GetWindow<ProceduralLevelSeedWindow>(true, "Procedural Level Seed");
+        w.minSize = w.maxSize = new Vector2(260f, 70f);
+    }
+
+    private void OnGUI()
+    {
+        seed = EditorGUILayout.IntField("Seed", seed);
+        if (GUILayout.Button("Generate"))
+            ProceduralLevelGenerator.GenerateLevel(seed);
     }
 }
