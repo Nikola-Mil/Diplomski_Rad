@@ -262,9 +262,12 @@ public static class BuildGameScene
         // ── 9. Spike Hazards ──────────────────────────────────────────────────
         // Floor surface: world y=-3.  Spike scale=0.4 → half-height=0.2.
         // Centre at y=-2.8 → bottom at y=-3.0 (flush with surface).
+        // No spikes under the low platforms (x -13..-10 and 1..5, cell y=-2):
+        // the 1-tile gap beneath them is lower than the 1.1-unit player, so a
+        // spike there could never be touched.
         try
         {
-            float[] spikeXs = { -12f, -6f, 3f, 9f, 14f };
+            float[] spikeXs = { -6f, 9f, 14f };
             for (int i = 0; i < spikeXs.Length; i++)
                 SpawnSpikeHazard($"Spike_{i}", new Vector3(spikeXs[i], -2.8f, 0f));
         }
